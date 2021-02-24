@@ -1,0 +1,195 @@
+---
+title: 'GLMER Disconnect Analysis'
+author: 'Dave Braun'
+date: 'October 29, 2020'
+output:
+  html_document:
+    code_folding: hide
+    theme: flatly
+    df_print: paged
+---
+
+This document was last updated on `r Sys.time()`
+
+The purpose of this document is to run the analyses needed for Appendix B in text, namely fitting a non-linear model and investigating observations at `point_difference > 0` in Experiment 2 data.
+
+```{r include = FALSE}
+library(tidyverse)
+library(lme4)
+```
+
+# {.tabset} 
+## Non-Linear Analysis
+
+```{r}
+d <- read.csv('../data/disconnect_green_temp.csv')
+d
+```
+
+
+
+```{r}
+## compute needed vars
+d$difference_s <- d$difference
+d$difference3 <- d$difference^3
+```
+
+
+**Linear vs. Non-Linear**
+
+```{r}
+#l1 <- glmer(transcode ~ difference + (1 + difference | subject), data = d, family = binomial(link = 'logit'), control = glmerControl(optimizer = 'bobyqa'))
+#n1 <- glmer(transcode ~ difference + scale(difference3) + (1 + difference + scale(difference3) | subject), data = d, family = binomial(link = 'logit'), control = glmerControl(optimizer = 'bobyqa'))
+#save(l1, n1, file = 'models/l1_n1.RData')
+load('models/l1_n1.RData')
+```
+
+```{r}
+anova(l1, n1)
+```
+
+**Model Specification**
+
+```{r}
+#n2 <- glmer(transcode ~ difference + scale(difference3) + (1 | subject) + (0 + difference | subject) + (0 + difference3 | subject), data = d, family = binomial(link = 'logit'), control = glmerControl(optimizer = 'bobyqa'))
+#saveRDS(n2, 'models/n2.RData')
+n2 <- readRDS('models/n2.RData')
+anova(n1, n2)
+```
+
+The three covariance parameters in the model are significant and I don't know the syntax for dropping them individually so we'll leave them all in.
+
+**Inference**
+
+```{r}
+summary(n1)
+exp(fixef(n1))
+
+## takes too long
+CIs <- confint(n1, method = 'Wald')
+exp(CIs)
+```
+
+**Hypothesis Testing**
+
+Cubed term significance: 
+```{r}
+#n1_no3 <- glmer(transcode ~ difference + (1 + difference + scale(difference3) | subject), data = d, family = binomial(link = 'logit'), control = glmerControl(optimizer = 'bobyqa'))
+#saveRDS(n1_no3, 'models/n1_no3.RData')
+n1_no3 <- readRDS('models/n1_no3.RData')
+anova(n1, n1_no3)
+```
+
+Point difference significance: 
+```{r}
+ #n1_nod <- glmer(transcode ~ scale(difference3) + (1 + difference + scale(difference3) | subject), data = d, family = binomial(link = 'logit'), control = glmerControl(optimizer = 'bobyqa'))
+# saveRDS(n1_nod, 'models/n1_nod')
+n1_nod <- readRDS('models/n1_nod')
+anova(n1, n1_nod)
+```
+
+**Prediction**
+
+```{r}
+### bolker's compute CI function
+easyPredCI <- function(model,newdata=NULL,alpha=0.05) {
+    ## baseline prediction, on the linear predictor (logit) scale:
+    pred0 <- predict(model,re.form=NA,newdata=newdata)
+    ## fixed-effects model matrix for new data
+    X <- model.matrix(formula(model,fixed.only=TRUE)[-2],newdata)
+    beta <- fixef(model) ## fixed-effects coefficients
+    V <- vcov(model)     ## variance-covariance matrix of beta
+    pred.se <- sqrt(diag(X %*% V %*% t(X))) ## std errors of predictions
+    ## inverse-link function
+    linkinv <- family(model)$linkinv
+    ## construct 95% Normal CIs on the link scale and
+    ##  transform back to the response (probability) scale:
+    crit <- -qnorm(alpha/2)
+    linkinv(cbind(conf.low=pred0-crit*pred.se,
+                  conf.high=pred0+crit*pred.se))
+}
+```
+
+```{r}
+newdata <- data.frame(difference = -9:9)
+newdata$difference3 = scale(newdata$difference)
+
+newdata$proba <- predict(n1, newdata = newdata, type = 'response', allow.new.levels = TRUE, re.form = NA)
+newdata <- cbind(newdata, easyPredCI(n1, newdata = newdata))
+```
+
+```{r}
+d %>% 
+  group_by(subject, difference) %>% 
+  summarize(transcode = mean(transcode)) %>%
+  ggplot(aes(x = difference)) +
+  geom_line(aes(group = subject, y = transcode, color = 'black')) +
+  geom_ribbon(data = newdata, aes(ymin = conf.low, ymax = conf.high), alpha = .3, fill = 'blue') + 
+  geom_line(data = newdata, aes(x = difference, y = proba, color = 'blue'), size = 2) +
+  labs(
+  x = 'Point Difference (Points for Switching Tasks)',
+  y = 'Proportion of Task Switching'
+  ) +
+  scale_x_continuous(labels = -9:9, breaks = -9:9) +
+  scale_color_manual(values = c('black' = 'black', 'blue' = 'blue'), labels = c('black' = 'Subject Means', 'blue' = 'Model Prediction'), name = element_blank()) +
+  theme_minimal() + 
+  theme(panel.grid = element_blank(),
+        panel.border = element_rect(fill = NA, color = 'black'),
+        legend.position = c(.2, .75))
+
+ggsave('cubic_glmer_prediction.png', height = 3.9, width = 6.5, units = 'in')
+```
+
+
+## Linear Analysis
+
+This analysis consders only contexts were there was increased reward available for switching (ie, `point difference > 0`), fits a linear model to these data, and asks whether the point difference is positively related to levels of switching.
+
+**Model Selection**
+
+```{r}
+pos <- d[d$difference > 0,]
+# l1_pos <- glmer(transcode ~ difference + (1 + difference | subject), data = pos, family = binomial(link = 'logit'), control = glmerControl(optimizer = 'bobyqa'), nAGQ = 1)
+# l1_pos_nocov <- glmer(transcode ~ difference + (1 | subject) + (0 + difference | subject), data = pos, family = binomial(link = 'logit'), control = glmerControl(optimizer = 'bobyqa'), nAGQ = 1)
+#l1_pos_twodown <- glmer(transcode ~ difference + (1 | subject), data = pos, family = binomial(link = 'logit'), control = glmerControl(optimizer = 'bobyqa'), nAGQ = 1)
+# save(l1_pos, l1_pos_nocov, l1_pos_twodown, file = 'models/l1_pos.RData')
+load(file = 'models/l1_pos.RData')
+anova(l1_pos, l1_pos_nocov)
+anova(l1_pos_nocov, l1_pos_twodown)
+```
+
+**Inference**
+
+```{r}
+summary(l1_pos_nocov)
+exp(fixef(l1_pos_nocov))
+exp(confint(l1_pos_nocov, method = 'Wald'))
+```
+
+**Hypothesis Testing**
+
+```{r}
+#l1_pos_nodiff <- glmer(transcode ~ 1 + (1 | subject) + (0 + difference | subject), data = pos, family = binomial(link = 'logit'), control = glmerControl(optimizer = 'bobyqa'), nAGQ = 1)
+# saveRDS(l1_pos_nodiff, 'models/l1_pos_nodiff')
+l1_pos_nodiff <- readRDS('models/l1_pos_nodiff')
+anova(l1_pos, l1_pos_nodiff)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

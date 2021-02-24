@@ -1,0 +1,133 @@
+---
+title: "Experiment 1 Preprocessing"
+author: "Dave Braun"
+date: "6/22/2020"
+output: 
+  html_document:
+    theme: flatly
+    df_print: paged
+---
+
+This document was last updated on `r Sys.time()`.
+
+```{r include = FALSE}
+library(tidyverse)
+library(data.table)
+```
+
+```{r}
+d <- read.csv('../../data/disconnect_original.csv')
+## keeping this old school method of selecting cols cuz it selects and renames in one step
+## select and rename columns ----
+keep <- matrix(c('Subject', 'subject',
+                 'blocks.Sample', 'block',
+                 'pointvalueL.SubTrial.', 'leftpoints',
+                 'pointvalueR.SubTrial.', 'rightpoints',
+                 'Procedure.Trial.', 'procedure',
+                 'responselocation.SubTrial.', 'responselocation',
+                 'RSI.SubTrial.', 'rsi',
+                 'stim1.SubTrial.', 'stim1',
+                 'stimulus.RT.SubTrial.', 'rt',
+                 'blocktime', 'blocktime',
+                 'taskcode.SubTrial.', 'taskcode',
+                 'transition.SubTrial.', 'transition'
+),ncol=2, byrow=T)
+
+
+
+## column renaming and basic variable computing ----
+
+d <- d[, keep[,1]]
+colnames(d) <- keep[,2]
+head(d)
+```
+
+
+```{r}
+d <- d %>% 
+  mutate(error = ifelse(taskcode == 'error',1,0), 
+         errortrim = ifelse(error == 1 | shift(error == 1), 1, 0),
+         transcode = as.numeric(ifelse(transition == 'Switch', 1, ifelse(transition == 'Rep', 0, ''))),
+         stimrep = ifelse(stim1 == shift(stim1), 1, 0),
+         current_pv = as.numeric(ifelse(shift(responselocation) == 'left', leftpoints, ifelse(shift(responselocation) == 'right', rightpoints, ''))), 
+         other_pv = as.numeric(ifelse(shift(responselocation) == 'right', leftpoints, ifelse(shift(responselocation) == 'left', rightpoints, ''))),
+         difference = as.numeric(ifelse(shift(responselocation) == 'left', rightpoints - leftpoints, ifelse(shift(responselocation) == 'right', leftpoints - rightpoints, '')))) 
+```
+
+
+```{r}
+d %>% 
+  group_by(subject) %>% 
+  summarize(mean_error = mean(error)) %>% 
+  ggplot(aes(x = reorder(x = subject, -mean_error), y = mean_error)) +
+  geom_bar(stat = 'identity') + 
+  labs(
+    x = 'Subject',
+    y = 'Error Rate'
+  ) +
+  geom_hline(yintercept = .15, linetype = 'dashed', color = 'grey') +
+  ylim(0,.2) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+```
+
+
+
+```{r}
+## keep only relevant trials
+d <- d %>% 
+  filter(procedure == 'blockproc', transition != 'StartBlock') %>% 
+  select(-stim1, -procedure, -taskcode, -transition)
+
+## save error data
+error_data <- d
+
+## record initial rows
+original_rows <- nrow(d)
+
+## error filtering
+d <- d %>% 
+  filter(errortrim == 0) %>% 
+  select(-error, -errortrim)
+
+row_count <- nrow(d)
+
+trial_summary <- data.frame(rows_dropped = (original_rows - nrow(d)) / original_rows, reason = 'Dropped error trials')
+
+```
+
+
+```{r}
+## rt trim
+d <- d %>% 
+  group_by(subject) %>% 
+  summarize(mean_rt = mean(rt), sd_rt = sd(rt)) %>% 
+  inner_join(d, by = 'subject') %>% 
+  filter(rt <= mean_rt + 2 * sd_rt, rt >= mean_rt - 2 * sd_rt) %>% 
+  select(-mean_rt, sd_rt)
+
+trial_summary <- rbind(trial_summary, data.frame(rows_dropped = (row_count - nrow(d)) / row_count, reason = 'Trimming based on +/- 2 SDs on participant-wise RT means'))
+trial_summary
+```
+
+
+```{r}
+write.csv(d, '../../data/disconnect.csv', row.names = FALSE)
+write.csv(error_data, '../../data/disconnect_errors.csv', row.names = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

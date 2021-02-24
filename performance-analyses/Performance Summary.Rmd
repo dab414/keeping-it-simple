@@ -1,0 +1,423 @@
+---
+title: "Performance Analyses"
+output:
+  html_document:
+    df_print: paged
+---
+
+We'll start by doing some basic performance analyses on disconnect data, followed by doing the same analyses on green data. For each, I'll analyze the interaction between RSI and transition on response time and error rates.
+
+# Experiment 1 Performance Data
+
+## Response Time Data
+
+Let's first check out the subject-wise means.
+*Note: all RT data has been trimmed at +/- 2 SDs on subject-wise means*
+
+Load libraries and data:
+
+```{r}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(ez)
+rt_data <- fread('../experiment_one/data/disconnect_rt.csv')
+error_data <- fread('../experiment_one/data/disconnect_errors.csv')
+current_data <- fread('../experiment_one/data/disconnect.csv')
+
+rt_data
+
+hist(rt_data$rt, main = 'Histogram of RT', xlab = 'Response Time (ms)')
+paste('Mean RT:', mean(rt_data$rt), 'Min RT:', min(rt_data$rt), 'Max RT:', max(rt_data$rt))
+
+```
+
+Looking at the subject-wise means for RSI X Transition -> RT
+
+```{r}
+rt_data$transcode <- as.factor(rt_data$transcode)
+rt_data$rsi <- as.factor(rt_data$rsi)
+
+rt_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(rt = mean(rt)) %>%
+  print() %>%
+  ggplot(aes(x = rsi, y = rt)) + geom_point(aes(group = transcode, color = transcode), position = position_dodge(width = 0.9)) + 
+    geom_violin(aes(fill = transcode),alpha = .2)
+
+```
+
+According to the plot, it looks as though there are a couple outlier points, but I double checked and the data going into these were indeed trimmed at +/- 2 SDs on subject-wise means.
+
+Let's make sure all subjects have data in all cells of the design:
+
+```{r}
+rt_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(subject) %>%
+  summarize(n())
+  
+```
+
+We can see that subject 4 and 17 have two missing cells, so we'll drop these subjects from the analysis
+
+```{r}
+rt_data <- rt_data %>%
+  filter(subject != 4 & subject != 17) %>%
+  data.table()
+```
+
+Let's run an ANOVA and plot the results
+
+```{r}
+N <- rt_data %>% 
+  group_by(subject) %>% 
+  summarize(n()) %>% 
+  nrow()
+
+model1 <- rt_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(rt = mean(rt)) %>%
+  ezANOVA(wid = subject, within = .(rsi, transcode), dv = rt, type = 2, detailed = T)
+
+cbind(model1$ANOVA, n2p = model1$ANOVA$SSn / (model1$ANOVA$SSn + model1$ANOVA$SSd))
+
+dodge <- position_dodge(width = 0.9)
+
+rt_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(rsi) %>%
+  summarize(r_time = mean(rt), se = sd(rt) / sqrt(N))
+
+rt_data %>%
+  group_by(subject, transcode, rsi) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(transcode) %>%
+  summarize(r_time = mean(rt), se = sd(rt) / sqrt(N))
+
+rt_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(rsi, transcode) %>%
+  summarize(r_time = mean(rt), se = sd(rt) / sqrt(N)) %>%
+  print() %>%
+  ggplot(aes(x = factor(rsi), y = r_time, group = factor(transcode))) + geom_bar(aes(fill = factor(transcode)), stat = 'identity', position = dodge) + 
+    geom_errorbar(aes(ymax = se + r_time, ymin = r_time - se, group = factor(transcode)), position = dodge, width = 0.5)
+```
+
+It looks like we're seeing a signifant reduction in switch cost at longer RSIs, consistent with the literature.
+
+To follow up on the interaction, we'll look at the simple effect of transition within both long and short RSIs:
+
+```{r}
+# save the mean square and SSerror error for the interaction term in the omnibus model
+omnibus_mse <- model1$ANOVA[4,'SSd'] / model1$ANOVA[4,'DFd']
+ssd <- model1$ANOVA[4,'SSd']
+
+# run follow-up models on long and short RSIs
+
+longRSI_model <- ezANOVA(data = rt_data[rsi == '1100'], wid = subject, within = transcode, dv = rt, type = 2, detailed = T)
+shortRSI_model <- ezANOVA(data = rt_data[rsi == '200'], wid = subject, within = transcode, dv = rt, type = 2, detailed = T)
+
+# save mean square numerator (in this case it's the same thing as SSn, because DFn = 1)
+longRSI_msn <- longRSI_model$ANOVA[2, 'SSn']
+shortRSI_msn <- shortRSI_model$ANOVA[2, 'SSn']
+
+#effect size
+longRSI_n2p <- longRSI_msn / (longRSI_msn + ssd)
+shortRSI_n2p <- shortRSI_msn / (shortRSI_msn + ssd)
+
+#F statistic
+longRSI_f <- longRSI_msn / omnibus_mse
+shortRSI_f <- shortRSI_msn / omnibus_mse
+
+# degress of freedom
+df1 <- 1 ## same for both, because only two levels for both factors
+df2 <- model1$ANOVA[2,'DFd'] #degrees of freedom error for the interaction term in omnibus analysis
+
+# p values
+longRSI_p <- pf(longRSI_f, df1, df2, lower.tail = F)
+shortRSI_p <- pf(shortRSI_f, df1, df2, lower.tail = F)
+
+## report the final effects
+print('Simple effect of transition for long RSI')
+paste("F(",df1,", ",df2, ") = ", round(longRSI_f, digits =2), ", p = ", round(longRSI_p, digits = 5), ', np2 = ', round(longRSI_n2p, digits = 2), sep='')
+
+print('Simple effect of transition for short RSI')
+paste("F(",df1,", ",df2, ") = ", round(shortRSI_f, digits =2), ", p = ", round(shortRSI_p, digits = 5), ', np2 = ', round(shortRSI_n2p, digits = 2), sep='')
+
+```
+
+The effects are pretty huge across the board, but we can see that there is a greater switch cost at short RSIs rather than long RSIs.
+
+## Error Data
+
+I'm going to quickly run a similar ANOVA on the error data.
+
+Error rates across conditions by subject:
+
+```{r}
+error_data %>%
+  group_by(subject, transcode, rsi) %>%
+  summarize(error = mean(error))
+
+error_data$transcode <- as.factor(error_data$transcode)
+error_data$rsi <- as.factor(error_data$rsi)
+
+error_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(error = mean(error)) %>%
+  print() %>%
+  ggplot(aes(x = rsi, y = error)) + geom_point(aes(group = transcode, color = transcode), position = position_dodge(width = 0.9)) + 
+    geom_violin(aes(fill = transcode),alpha = .2)
+
+```
+
+Checking that all subjects have data in all cells:
+
+```{r}
+error_data %>%
+  group_by(subject, transcode, rsi) %>%
+  summarize(error = mean(error)) %>%
+  group_by(subject) %>%
+  summarize(n())
+```
+
+Yanking subject 4 and running the ANOVA and follow-ups if necessary:
+
+```{r}
+error_data <- error_data %>%
+  filter(subject != 4)
+
+model1 <- error_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(error = mean(error)) %>%
+  ezANOVA(wid = subject, within = .(rsi, transcode), dv = error, type = 2, detailed = T)
+
+cbind(model1$ANOVA, n2p = model1$ANOVA$SSn / (model1$ANOVA$SSn + model1$ANOVA$SSd))
+
+error_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(error = mean(error)) %>%
+  group_by(rsi) %>%
+  summarize('Mean Error' = mean(error), 'SE Error' = sd(error) / sqrt(N))
+
+dodge <- position_dodge(width = 0.9)
+
+error_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(error = mean(error)) %>%
+  group_by(rsi, transcode) %>%
+  summarize(r_time = mean(error), se = sd(error) / sqrt(N)) %>%
+  ggplot(aes(x = factor(rsi), y = r_time, group = factor(transcode))) + geom_bar(aes(fill = factor(transcode)), stat = 'identity', position = dodge) + 
+    geom_errorbar(aes(ymax = se + r_time, ymin = r_time - se, group = factor(transcode)), position = dodge, width = 0.5)
+
+```
+
+It looks like neither transition nor rsi significantly influenced error rates.
+
+#Experiment 2 Performance Data
+
+Just like Experiment 1, we'll start with response time and move to error data.
+
+## Response Times
+
+```{r}
+rt_data <- fread('../experiment_two/data/disconnect_green_rt.csv')
+error_data <- fread('../experiment_two/data/disconnect_green_error.csv')
+current_data <- fread('../experiment_two/data/disconnect_green.csv')
+
+rt_data
+
+hist(rt_data$rt, main = 'Histogram of RT', xlab = 'Response Time (ms)')
+paste('Mean RT:', mean(rt_data$rt), 'Min RT:', min(rt_data$rt), 'Max RT:', max(rt_data$rt))
+```
+
+
+Looking at the subject-wise means for RSI X Transition -> RT
+
+```{r}
+rt_data$transcode <- as.factor(rt_data$transcode)
+rt_data$rsi <- as.factor(rt_data$rsi)
+
+rt_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(rt = mean(rt)) %>%
+  print() %>%
+  ggplot(aes(x = rsi, y = rt)) + geom_point(aes(group = transcode, color = transcode), position = position_dodge(width = 0.9)) + 
+    geom_violin(aes(fill = transcode),alpha = .2)
+
+```
+
+According to the plot, it looks as though there are a couple outlier points, but I double checked and the data going into these were indeed trimmed at +/- 2 SDs on subject-wise means.
+
+Let's make sure all subjects have data in all cells of the design:
+
+```{r}
+rt_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(subject) %>%
+  summarize(n())
+  
+```
+
+All subjects look good.
+
+Let's run an ANOVA and plot the results
+
+```{r}
+N <- rt_data %>% 
+  group_by(subject) %>% 
+  summarize(n()) %>% 
+  nrow()
+
+model1 <- rt_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(rt = mean(rt)) %>%
+  ezANOVA(wid = subject, within = .(rsi, transcode), dv = rt, type = 2, detailed = T)
+
+cbind(model1$ANOVA, n2p = model1$ANOVA$SSn / (model1$ANOVA$SSn + model1$ANOVA$SSd))
+
+dodge <- position_dodge(width = 0.9)
+
+rt_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(rsi, transcode) %>%
+  summarize(r_time = mean(rt), se = sd(rt) / sqrt(N)) %>%
+  print() %>%
+  ggplot(aes(x = factor(rsi), y = r_time, group = factor(transcode))) + geom_bar(aes(fill = factor(transcode)), stat = 'identity', position = dodge) + 
+    geom_errorbar(aes(ymax = se + r_time, ymin = r_time - se, group = factor(transcode)), position = dodge, width = 0.5)
+```
+
+We're seeing the same general effects as in Experiment 1, and (once again) the interaction is highly significant. Spitting out means and following up on the interaction:
+
+```{r}
+## print means for main effects
+rt_data %>%
+  group_by(subject, rsi) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(rsi) %>%
+  summarize(r_time = mean(rt), se = sd(rt) / sqrt(N))
+
+rt_data %>%
+  group_by(subject, transcode) %>%
+  summarize(rt = mean(rt)) %>%
+  group_by(transcode) %>%
+  summarize(r_time = mean(rt), se = sd(rt) / sqrt(N))
+
+# save the mean square and SSerror error for the interaction term in the omnibus model
+omnibus_mse <- model1$ANOVA[4,'SSd'] / model1$ANOVA[4,'DFd']
+ssd <- model1$ANOVA[4,'SSd']
+
+# run follow-up models on long and short RSIs
+
+longRSI_model <- ezANOVA(data = rt_data[rsi == '1100'], wid = subject, within = transcode, dv = rt, type = 2, detailed = T)
+shortRSI_model <- ezANOVA(data = rt_data[rsi == '200'], wid = subject, within = transcode, dv = rt, type = 2, detailed = T)
+
+# save mean square numerator (in this case it's the same thing as SSn, because DFn = 1)
+longRSI_msn <- longRSI_model$ANOVA[2, 'SSn']
+shortRSI_msn <- shortRSI_model$ANOVA[2, 'SSn']
+
+#effect size
+longRSI_n2p <- longRSI_msn / (longRSI_msn + ssd)
+shortRSI_n2p <- shortRSI_msn / (shortRSI_msn + ssd)
+
+#F statistic
+longRSI_f <- longRSI_msn / omnibus_mse
+shortRSI_f <- shortRSI_msn / omnibus_mse
+
+# degress of freedom
+df1 <- 1 ## same for both, because only two levels for both factors
+df2 <- model1$ANOVA[2,'DFd'] #degrees of freedom error for the interaction term in omnibus analysis
+
+# p values
+longRSI_p <- pf(longRSI_f, df1, df2, lower.tail = F)
+shortRSI_p <- pf(shortRSI_f, df1, df2, lower.tail = F)
+
+## report the final effects
+print('Simple effect of transition for long RSI')
+paste("F(",df1,", ",df2, ") = ", round(longRSI_f, digits =2), ", p = ", round(longRSI_p, digits = 5), ', np2 = ', round(longRSI_n2p, digits = 2), sep='')
+
+print('Simple effect of transition for short RSI')
+paste("F(",df1,", ",df2, ") = ", round(shortRSI_f, digits =2), ", p = ", round(shortRSI_p, digits = 5), ', np2 = ', round(shortRSI_n2p, digits = 2), sep='')
+
+```
+
+Once again, very strong simple effects of transition for both long and short RSI, but the effect size of transition is stronger for long RSI than for short RSI.
+
+## Error Data
+
+Same idea, as Experiment 1. Transition X RSI -> error rates
+
+Error rates across conditions by subject:
+
+```{r}
+error_data$transcode <- as.factor(error_data$transcode)
+error_data$rsi <- as.factor(error_data$rsi)
+
+error_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(error = mean(error)) %>%
+  print() %>%
+  ggplot(aes(x = rsi, y = error)) + geom_point(aes(group = transcode, color = transcode), position = position_dodge(width = 0.9)) + 
+    geom_violin(aes(fill = transcode),alpha = .2)
+
+```
+
+Checking that all subjects have data in all cells:
+
+```{r}
+error_data %>%
+  group_by(subject, transcode, rsi) %>%
+  summarize(error = mean(error)) %>%
+  group_by(subject) %>%
+  summarize(n())
+```
+
+Looks good. Running the ANOVA and follow-ups if necessary:
+
+```{r}
+model1 <- error_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(error = mean(error)) %>%
+  ezANOVA(wid = subject, within = .(rsi, transcode), dv = error, type = 2, detailed = T)
+
+cbind(model1$ANOVA, n2p = model1$ANOVA$SSn / (model1$ANOVA$SSn + model1$ANOVA$SSd))
+
+dodge <- position_dodge(width = 0.9)
+
+error_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(error = mean(error)) %>%
+  group_by(rsi, transcode) %>%
+  summarize(r_time = mean(error), se = sd(error) / sqrt(n())) %>%
+  ggplot(aes(x = factor(rsi), y = r_time, group = factor(transcode))) + geom_bar(aes(fill = factor(transcode)), stat = 'identity', position = dodge) + 
+    geom_errorbar(aes(ymax = se + r_time, ymin = r_time - se, group = factor(transcode)), position = dodge, width = 0.5)
+
+```
+
+Two main effects, and no interaction. Below are the means for the main effects:
+
+```{r}
+error_data %>%
+  group_by(subject, rsi, transcode) %>%
+  summarize(error = mean(error)) %>%
+  group_by(rsi) %>%
+  summarize(errors = mean(error), se = sd(error) / sqrt(N))
+
+error_data %>%
+  group_by(subject, transcode, rsi) %>%
+  summarize(error = mean(error)) %>%
+  group_by(transcode) %>%
+  summarize(errors = mean(error), se = sd(error) / sqrt(N))
+
+```
+
+Error rates are significantly higher when switching tasks and when RSI is short.
+
+
+

@@ -1,0 +1,157 @@
+---
+title: "Disconnect Choice Analysis"
+author: "David Braun"
+date: "6/24/2020"
+output:
+  html_document:
+    theme: flatly
+    df_print: paged
+    code_folding: hide
+---
+
+```{r include = FALSE}
+library(tidyverse)
+library(lme4)
+library(rpart)
+library(rpart.plot)
+```
+
+```{r}
+d2 <- read.csv('../exp2/data/disconnect_green_temp.csv')
+d1 <- read.csv('../exp1/data/disconnect.csv')
+N1 <- d1 %>% 
+  group_by(subject) %>% 
+  summarize(n()) %>% 
+  nrow()
+
+N2 <- d2 %>% 
+  group_by(subject) %>% 
+  summarize(n()) %>% 
+  nrow()
+
+d1 <- d1 %>% 
+  select(-sd_rt, -leftpoints, -rightpoints, -responselocation) %>% 
+  mutate(color = NA)
+
+d2 <- d2 %>% 
+  select(-rt_mean, -rt_sd)
+
+d1$experiment <- 'Experiment 1'
+d2$experiment <- 'Experiment 2'
+d <- rbind(d1,d2)
+```
+The sample size of Experiment 1 is `r N1`. The sample size of Experiment 2 is `r N2`.
+
+## Visualize Descriptive Pattern
+
+```{r}
+scm <- d %>% 
+  group_by(subject, difference, experiment) %>% 
+  summarize(transcode = mean(transcode))
+
+p1 <- scm %>% 
+  group_by(difference, experiment) %>% 
+  summarize(pswitch = mean(transcode), se = sd(transcode) / sqrt(n())) %>% 
+  ggplot(aes(x = difference, y = pswitch)) +
+  geom_line(data = scm, aes(x = difference, y = transcode, group = subject), alpha = .5) + 
+  geom_line(size = 2) + 
+  geom_errorbar(aes(ymin = pswitch - se, ymax = pswitch + se), width = .5) + 
+  labs(
+    x = 'Points for Switching',
+    y = 'Proportion of Switching'
+  ) +
+  facet_wrap(~experiment) +
+  scale_x_continuous(breaks = -9:9, labels = -9:9) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        strip.background = element_rect(color = 'black', fill = 'white'))
+  
+p1
+```
+
+
+
+```{r eval = FALSE, include = FALSE}
+d$difference2 <- d$difference^2
+d$difference3 <- d$difference^3
+
+m1 <- glm(transcode ~ difference3 + difference2 + difference, data = d, family = binomial(link = 'logit'))
+
+test_data <- data.frame(difference = -10:10)
+test_data$difference2 <- test_data$difference^2
+test_data$difference3 <- test_data$difference^3
+test_data$proba <- predict(m1, newdata = test_data, type = 'response')
+
+p1 +
+  geom_line(data = test_data, aes(x = difference, y = proba), size = 2, color = 'blue')
+```
+
+## Regression tree
+
+### What is a Regression Tree?
+
+Regression tree is a recursive algorithm that splits the data into smaller and smaller parts to minimize error. In this case, we can think about the algorithm binning the difference variable into different groups, where each group is predicted to have the same response on the Y variable. This is an exploratory, data mining technique, because the algorithm 'learns' these groups from the data.  
+
+* **In Experiment 1,** we see the data is broken into two main groups along the X-axis, which nicely captures the step function (technically, the zero-level is in a group of its own).  
+* **In Experiment 2,** we see more groups that are broken *roughly* in line with our color conditions.
+
+### How will this fit the story?
+
+If the story is about how people are just making a categorical decision when there's only numeric information and making more nuanced decisions when there's more information, then I think we can present the regression tree as a way of sort of descriptively showing that this is the case. Maybe be up front that, in Experiment 1, we intended to fit a linear model but, after seeing the data, that would've been inappropriate and a regression tree was more appropriate even though it's a more exploratory approach. In Experiment 2, I think we can present the regression tree alongside the preregistered ANOVA analyses. I think the regression tree gives us an easy way to contrast the two experiments without having to worry about not having enough statistical power to make inferential claims based on p-values.
+
+```{r include = FALSE}
+ # results below look a lot nicer when using regression tree instead of decision tree, but idk that i can justify it
+```
+
+
+```{r}
+m1 <- rpart(transcode ~ difference, data = d[d$experiment == 'Experiment 1',], control = rpart.control(cp=.0008)) #  method = 'class'
+m2 <- rpart(transcode ~ difference, data = d[d$experiment == 'Experiment 2',], control = rpart.control(cp=.0008)) # method = 'class'
+test_data <- expand.grid(difference = -10:10, experiment = c('Experiment 1', 'Experiment 2'))
+test_data$proba <- c(predict(m1, newdata = test_data[test_data$experiment == 'Experiment 1',]), predict(m2, newdata = test_data[test_data$experiment == 'Experiment 2',]))
+p1 +
+  geom_line(data = test_data, aes(x = difference, y = proba), size = 2, color = 'blue') +
+  labs(caption = 'Black line reflects observed means. Blue line reflects model predictions.') +
+  geom_vline(xintercept = 3.5, linetype = 'dashed', alpha = .7, color = 'dark green') +
+  geom_vline(xintercept = 6.5, linetype = 'dashed', alpha = .7, color = 'light green') 
+```
+
+### Experiment 1 Fit Summary
+
+$R^2$
+```{r}
+tmp <- printcp(m1)
+```
+
+```{r}
+print(1-tmp[,c(3,4)])
+```
+
+
+```{r}
+prp(m1, digits = 4, extra = 1)
+```
+
+### Experiment 2 Fit Summary
+
+```{r}
+tmp <- printcp(m2)
+```
+
+```{r}
+print(1 - tmp[,c(3,4)])
+```
+
+
+```{r}
+prp(m2, digits = 4, extra = 1)
+```
+
+
+
+
+
+
+
+
+

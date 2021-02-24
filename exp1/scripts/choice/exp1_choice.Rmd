@@ -1,0 +1,97 @@
+---
+title: "Experiment 1 Choice Analysis"
+author: "David Braun"
+date: "6/24/2020"
+output:
+  html_document:
+    theme: flatly
+    df_print: paged
+    code_folding: hide
+---
+
+```{r include = FALSE}
+library(tidyverse)
+library(lme4)
+library(rpart)
+```
+
+```{r}
+#d <- read.csv('../../../exp2/data/disconnect_green_temp.csv')
+d <- read.csv('../../data/disconnect.csv')
+N <- d %>% 
+  group_by(subject) %>% 
+  summarize(n()) %>% 
+  nrow()
+d
+```
+The sample size is `r N`.
+
+## Visualize Descriptive Pattern
+
+```{r}
+scm <- d %>% 
+  group_by(subject, difference) %>% 
+  summarize(transcode = mean(transcode))
+
+p1 <- scm %>% 
+  group_by(difference) %>% 
+  summarize(pswitch = mean(transcode), se = sd(transcode) / sqrt(n())) %>% 
+  ggplot(aes(x = difference, y = pswitch)) +
+  geom_line(data = scm, aes(x = difference, y = transcode, group = subject), alpha = .5) + 
+  geom_line(size = 2) + 
+  geom_errorbar(aes(ymin = pswitch - se, ymax = pswitch + se), width = .5) + 
+  labs(
+    x = 'Points for Switching',
+    y = 'Proportion of Switching'
+  ) +
+  scale_x_continuous(breaks = -10:10, labels = -10:10) +
+  theme_bw() +
+  theme(panel.grid = element_blank())
+  
+p1
+```
+
+
+## Cubic Model
+
+No random effects.
+
+```{r}
+d$difference2 <- d$difference^2
+d$difference3 <- d$difference^3
+
+m1 <- glm(transcode ~ difference3 + difference2 + difference, data = d, family = binomial(link = 'logit'))
+
+test_data <- data.frame(difference = -10:10)
+test_data$difference2 <- test_data$difference^2
+test_data$difference3 <- test_data$difference^3
+test_data$proba <- predict(m1, newdata = test_data, type = 'response')
+
+p1 +
+  geom_line(data = test_data, aes(x = difference, y = proba), size = 2, color = 'blue')
+```
+
+Regression tree
+
+```{r}
+m2 <- rpart(transcode ~ difference, data = d, control = rpart.control(cp=.0008))
+test_data <- data.frame(difference = -10:10)
+test_data$proba <- predict(m2, newdata = test_data)
+p1 +
+  geom_line(data = test_data, aes(x = difference, y = proba), size = 2, color = 'blue')
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
